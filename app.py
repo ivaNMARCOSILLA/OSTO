@@ -1,13 +1,80 @@
 
-from flask import Flask, request, jsonify, send_from_directory, Response
+from flask import Flask, request, jsonify, send_from_directory, Response, session, redirect, render_template_string
 from flask_cors import CORS
 import yt_dlp
-import os, re, json, urllib.parse
+import os, re, json, urllib.parse, functools
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
-# Config yt-dlp
+# === CONTRASEÑA OSTO ===
+# Cambia esto o pon variable de entorno OSTO_PASSWORD en Render
+OSTO_PASSWORD = os.environ.get("OSTO_PASSWORD", "osto8551")
+app.secret_key = os.environ.get("SECRET_KEY", "osto-8551-secreto-privado-2026")
+
+LOGIN_HTML = r"""
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSTO PRIVADO - LOGIN</title>
+<style>
+:root{--bg:#050507;--card:#15151a;--neon:#ff0033;--border:#22222a;--text:#e8e8e8;--muted:#7a7a85}
+*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:monospace;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px;width:100%;max-width:380px;box-shadow:0 0 40px rgba(255,0,51,.15)}
+.logo{font-weight:700;font-size:28px;text-align:center;margin-bottom:6px}.logo span{color:var(--neon)}
+.sub{font-size:11px;color:var(--muted);text-align:center;margin-bottom:24px;letter-spacing:1px}
+input{width:100%;background:#0f0f12;border:1px solid var(--border);color:#fff;padding:12px 14px;border-radius:10px;outline:none;font-size:15px;font-family:monospace}
+input:focus{border-color:var(--neon)}
+.btn{width:100%;background:var(--neon);border:0;color:#fff;padding:12px;border-radius:10px;font-weight:700;cursor:pointer;margin-top:12px;letter-spacing:1px}
+.error{color:var(--neon);font-size:11px;margin-top:10px;text-align:center}
+.hint{color:var(--muted);font-size:10px;text-align:center;margin-top:14px}
+</style></head><body>
+<div class="box">
+<div class="logo">OSTO<span>TUBE</span></div>
+<div class="sub">PRIVADO 8551 • ACCESO RESTRINGIDO</div>
+<form method="POST" action="/login">
+<input type="password" name="password" placeholder="Contraseña privada" required autofocus>
+<button class="btn" type="submit">ENTRAR 8551</button>
+{% if error %}<div class="error">❌ {{error}}</div>{% endif %}
+<div class="hint">Variable en Render: OSTO_PASSWORD<br>Por defecto: osto8551</div>
+</form>
+</div>
+</body></html>
+"""
+
+def login_required(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('osto_auth'):
+            # Si es API, devuelve 401
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'No autorizado - login requerido'}), 401
+            return redirect('/login')
+        return f(*args, **kwargs)
+    return decorated
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        pwd = request.form.get('password','') or (request.json.get('password','') if request.is_json else '')
+        if pwd == OSTO_PASSWORD:
+            session['osto_auth'] = True
+            # si viene de fetch API, devuelve json
+            if request.is_json:
+                return jsonify({'ok': True})
+            return redirect('/')
+        else:
+            error = "Contraseña incorrecta"
+            if request.is_json:
+                return jsonify({'ok': False, 'error': error}), 401
+    return render_template_string(LOGIN_HTML, error=error)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
+# === TU CODIGO ORIGINAL PERO PROTEGIDO ===
+
 YDL_OPTS = {
     'quiet': True,
     'no_warnings': True,
@@ -49,7 +116,6 @@ def get_video_info(video_id):
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        # comments
         comments = []
         for c in (info.get('comments') or [])[:50]:
             comments.append({
@@ -57,16 +123,6 @@ def get_video_info(video_id):
                 'text': c.get('text'),
                 'likes': c.get('like_count'),
             })
-        formats = []
-        for f in info.get('formats', [])[-10:]:
-            if f.get('vcodec') != 'none' or f.get('acodec') != 'none':
-                formats.append({
-                    'ext': f.get('ext'),
-                    'height': f.get('height'),
-                    'acodec': f.get('acodec'),
-                    'vcodec': f.get('vcodec'),
-                    'url': f.get('url')[:120] + '...' if f.get('url') else None
-                })
         return {
             'id': info.get('id'),
             'title': info.get('title'),
@@ -83,10 +139,12 @@ def get_video_info(video_id):
         }
 
 @app.route('/')
+@login_required
 def index():
     return send_from_directory('.', 'index.html')
 
 @app.route('/api/search')
+@login_required
 def api_search():
     q = request.args.get('q', '').strip()
     if not q:
@@ -98,6 +156,7 @@ def api_search():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/video/<video_id>')
+@login_required
 def api_video(video_id):
     try:
         info = get_video_info(video_id)
@@ -106,8 +165,8 @@ def api_video(video_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/trending')
+@login_required
 def api_trending():
-    # Búsquedas por defecto con estética OSTO
     try:
         results = search_youtube("music 2026 hits", limit=16)
         return jsonify(results)
@@ -116,4 +175,5 @@ def api_trending():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
+    print(f"OSTO PASSWORD: {OSTO_PASSWORD} - Pon OSTO_PASSWORD en Render para cambiarla")
     app.run(host='0.0.0.0', port=port, debug=False)
