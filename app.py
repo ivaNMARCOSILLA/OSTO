@@ -5,14 +5,11 @@ import os, functools, requests
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
-# === CONFIG OSTO ===
 OSTO_PASSWORD = os.environ.get("OSTO_PASSWORD", "osto8551")
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 app.secret_key = os.environ.get("SECRET_KEY", "osto-8551-secreto-privado-2026")
 
-print(f"[OSTO] PASSWORD: {'***' if OSTO_PASSWORD else 'NO SET'} | YT API: {'OK' if YOUTUBE_API_KEY else 'NO - usando yt-dlp'}")
-
-LOGIN_HTML = r"""
+LOGIN_HTML = """
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OSTO PRIVADO - LOGIN</title>
 <style>
@@ -21,11 +18,10 @@ LOGIN_HTML = r"""
 .box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px;width:100%;max-width:380px;box-shadow:0 0 40px rgba(255,0,51,.15)}
 .logo{font-weight:700;font-size:28px;text-align:center;margin-bottom:6px}.logo span{color:var(--neon)}
 .sub{font-size:11px;color:var(--muted);text-align:center;margin-bottom:24px;letter-spacing:1px}
-input{width:100%;background:#0f0f12;border:1px solid var(--border);color:#fff;padding:12px 14px;border-radius:10px;outline:none;font-size:15px;font-family:monospace}
+input{width:100%;background:#0f0f12;border:1px solid var(--border);color:#fff;padding:12px 14px;border-radius:10px;outline:none;font-size:15px}
 input:focus{border-color:var(--neon)}
-.btn{width:100%;background:var(--neon);border:0;color:#fff;padding:12px;border-radius:10px;font-weight:700;cursor:pointer;margin-top:12px;letter-spacing:1px}
+.btn{width:100%;background:var(--neon);border:0;color:#fff;padding:12px;border-radius:10px;font-weight:700;cursor:pointer;margin-top:12px}
 .error{color:var(--neon);font-size:11px;margin-top:10px;text-align:center}
-.hint{color:var(--muted);font-size:10px;text-align:center;margin-top:14px}
 </style></head><body>
 <div class="box">
 <div class="logo">OSTO<span>TUBE</span></div>
@@ -34,7 +30,6 @@ input:focus{border-color:var(--neon)}
 <input type="password" name="password" placeholder="Contraseña privada" required autofocus>
 <button class="btn" type="submit">ENTRAR 8551</button>
 {% if error %}<div class="error">❌ {{error}}</div>{% endif %}
-<div class="hint">OSTO 8551 PRIVADO<br>YT API: """ + ("ACTIVA" if YOUTUBE_API_KEY else "NO - yt-dlp") + r"""</div>
 </form>
 </div>
 </body></html>
@@ -54,145 +49,76 @@ def login_required(f):
 def login():
     error=None
     if request.method=='POST':
-        pwd=request.form.get('password','') or (request.json.get('password','') if request.is_json else '')
+        pwd=request.form.get('password','')
         if pwd==OSTO_PASSWORD:
             session['osto_auth']=True
-            if request.is_json:
-                return jsonify({'ok':True})
             return redirect('/')
         else:
             error="Contraseña incorrecta"
-            if request.is_json:
-                return jsonify({'ok':False,'error':error}),401
-    return render_template_string(LOGIN_HTML.replace('{{error}}', error or ''), error=error)
+    return render_template_string(LOGIN_HTML, error=error)
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect('/login')
 
-# === YOUTUBE - API OFICIAL + FALLBACK yt-dlp ===
 def search_youtube_api(query, limit=12):
-    """Usa API oficial - 100% legal, sin bot"""
     if not YOUTUBE_API_KEY:
         raise Exception("No YT API KEY")
-    url = "https://www.googleapis.com/youtube/v3/search"
-    params = {
-        'part': 'snippet',
-        'q': query,
-        'maxResults': limit,
-        'type': 'video',
-        'key': YOUTUBE_API_KEY
-    }
-    r = requests.get(url, params=params, timeout=10)
-    if r.status_code != 200:
-        raise Exception(f"YT API Error {r.status_code}: {r.text[:200]}")
-    data = r.json()
+    url="https://www.googleapis.com/youtube/v3/search"
+    params={'part':'snippet','q':query,'maxResults':limit,'type':'video','key':YOUTUBE_API_KEY}
+    r=requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    data=r.json()
     results=[]
     for item in data.get('items',[]):
         vid=item['id'].get('videoId')
         sn=item['snippet']
-        results.append({
-            'id': vid,
-            'title': sn['title'],
-            'thumbnail': sn['thumbnails']['high']['url'],
-            'channel': sn['channelTitle'],
-            'duration': 0,
-            'view_count': 0,
-            'url': f"https://www.youtube.com/watch?v={vid}"
-        })
+        results.append({'id':vid,'title':sn['title'],'thumbnail':sn['thumbnails']['high']['url'],'channel':sn['channelTitle'],'duration':0,'view_count':0,'url':f"https://www.youtube.com/watch?v={vid}"})
     return results
 
 def search_youtube_ydl(query, limit=12):
     import yt_dlp
-    opts={
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': True,
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
-    }
+    opts={'quiet':True,'no_warnings':True,'extract_flat':True,'cookiefile':'cookies.txt' if os.path.exists('cookies.txt') else None}
     opts={k:v for k,v in opts.items() if v}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info=ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
         res=[]
         for e in info.get('entries',[]):
             if not e: continue
-            res.append({
-                'id': e.get('id'),
-                'title': e.get('title'),
-                'thumbnail': e.get('thumbnails', [{}])[-1].get('url') if e.get('thumbnails') else f"https://i.ytimg.com/vi/{e.get('id')}/hqdefault.jpg",
-                'channel': e.get('channel') or e.get('uploader'),
-                'duration': e.get('duration'),
-                'view_count': e.get('view_count'),
-                'url': f"https://www.youtube.com/watch?v={e.get('id')}",
-            })
+            res.append({'id':e.get('id'),'title':e.get('title'),'thumbnail':e.get('thumbnails', [{}])[-1].get('url') if e.get('thumbnails') else f"https://i.ytimg.com/vi/{e.get('id')}/hqdefault.jpg",'channel':e.get('channel') or e.get('uploader'),'duration':e.get('duration'),'view_count':e.get('view_count'),'url':f"https://www.youtube.com/watch?v={e.get('id')}"})
         return res
 
 def search_youtube(query, limit=12):
-    # Intenta API oficial primero
     if YOUTUBE_API_KEY:
         try:
             return search_youtube_api(query, limit)
         except Exception as e:
-            print(f"[OSTO] API fallo, fallback ydl: {e}")
-    # Fallback yt-dlp
+            print(f"API fallo: {e}")
     try:
         return search_youtube_ydl(query, limit)
     except Exception as e:
-        # Si es error de bot, devuelve mensaje claro
-        if "Sign in to confirm" in str(e) or "bot" in str(e).lower():
-            raise Exception("YouTube pide login bot. Añade YOUTUBE_API_KEY en Render o sube cookies.txt")
+        if "Sign in" in str(e):
+            raise Exception("YouTube pide login bot. Añade YOUTUBE_API_KEY en Render (ya lo hiciste) y redeploy.")
         raise e
 
 def get_video_info(video_id):
-    # Info con API oficial
     if YOUTUBE_API_KEY:
         try:
             url="https://www.googleapis.com/youtube/v3/videos"
-            params={'part':'snippet,statistics,contentDetails','id':video_id,'key':YOUTUBE_API_KEY}
+            params={'part':'snippet,statistics','id':video_id,'key':YOUTUBE_API_KEY}
             r=requests.get(url, params=params, timeout=10)
             data=r.json()
             if data.get('items'):
-                it=data['items'][0]
-                sn=it['snippet']
-                st=it.get('statistics',{})
-                return {
-                    'id': video_id,
-                    'title': sn['title'],
-                    'description': sn.get('description','')[:2000],
-                    'thumbnail': sn['thumbnails']['high']['url'],
-                    'channel': sn['channelTitle'],
-                    'view_count': st.get('viewCount'),
-                    'like_count': st.get('likeCount'),
-                    'upload_date': sn.get('publishedAt','')[:10],
-                    'duration': 0,
-                    'tags': sn.get('tags',[])[:20],
-                    'comments': [], # comentarios requieren otra llamada, lo dejamos vacio para no gastar cuota
-                    'is_live': False
-                }
-        except Exception as e:
-            print(f"get_video_info API fallo: {e}")
-    # Fallback yt-dlp
+                it=data['items'][0]; sn=it['snippet']; st=it.get('statistics',{})
+                return {'id':video_id,'title':sn['title'],'description':sn.get('description','')[:2000],'thumbnail':sn['thumbnails']['high']['url'],'channel':sn['channelTitle'],'view_count':st.get('viewCount'),'like_count':st.get('likeCount'),'upload_date':sn.get('publishedAt','')[:10],'duration':0,'tags':sn.get('tags',[])[:20],'comments':[],'is_live':False}
+        except: pass
     import yt_dlp
     url=f"https://www.youtube.com/watch?v={video_id}"
-    opts={'quiet':True,'no_warnings':True,'skip_download':True,'cookiefile':'cookies.txt' if os.path.exists('cookies.txt') else None}
-    opts={k:v for k,v in opts.items() if v}
+    opts={'quiet':True,'no_warnings':True,'skip_download':True}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info=ydl.extract_info(url, download=False)
-        return {
-            'id': info.get('id'),
-            'title': info.get('title'),
-            'description': info.get('description','')[:2000],
-            'thumbnail': info.get('thumbnail'),
-            'channel': info.get('channel') or info.get('uploader'),
-            'view_count': info.get('view_count'),
-            'like_count': info.get('like_count'),
-            'upload_date': info.get('upload_date'),
-            'duration': info.get('duration'),
-            'tags': info.get('tags',[])[:20],
-            'comments': [],
-            'is_live': info.get('is_live'),
-        }
+        return {'id':info.get('id'),'title':info.get('title'),'description':info.get('description','')[:2000],'thumbnail':info.get('thumbnail'),'channel':info.get('channel') or info.get('uploader'),'view_count':info.get('view_count'),'like_count':info.get('like_count'),'upload_date':info.get('upload_date'),'duration':info.get('duration'),'tags':info.get('tags',[])[:20],'comments':[],'is_live':info.get('is_live')}
 
 @app.route('/')
 @login_required
@@ -228,3 +154,4 @@ def api_trending():
 if __name__=='__main__':
     port=int(os.environ.get('PORT',8080))
     app.run(host='0.0.0.0', port=port, debug=False)
+
