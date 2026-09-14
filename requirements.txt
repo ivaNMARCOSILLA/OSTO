@@ -2,8 +2,3 @@ flask
 flask-cors
 requests
 yt-dlp
-google-api-python-client
-flask
-flask-cors
-requests
-yt-dlp
